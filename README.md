@@ -30,7 +30,7 @@ The engine is structured as a **Cargo Workspace** to enforce clear separation of
 1.  **Request Arrival**: Axum receives a JSON payload.
 2.  **L1 Filter**: Instant check against a local `DashMap` to drop immediate duplicates in RAM.
 3.  **Buffered Handoff**: Payload is pushed to a bounded MPSC channel. If full, a `503 Service Unavailable` is returned (**Circuit Breaking**).
-4.  **Worker Processing**: Parallel workers pull batches (2,500 events) from the channel.
+4.  **Worker Processing**: Parallel workers pull batches (5,000 events) from the channel.
 5.  **L2 Global Check**: Workers perform a batched `MGET` against Redis to verify idempotency across the cluster.
 6.  **Batched Insert**: Unique events are flushed to ClickHouse using `async_insert` for maximum disk I/O efficiency.
 
@@ -67,7 +67,7 @@ Benchmarks were conducted using **k6** with a `constant-arrival-rate` executor t
 1.  **Clone the Repository:**
     ```bash
     git clone [https://github.com/ShribasPanja/Alloy-Billing.git](https://github.com/ShribasPanja/Alloy-Billing.git)
-    cd alloy-ingestion
+    cd Alloy-Billing
     ```
 2.  **Initialize Environment:**
     ```bash
