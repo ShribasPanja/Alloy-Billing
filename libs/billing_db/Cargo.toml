@@ -1,0 +1,13 @@
+[package]
+name = "billing_db"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+billing_core = { workspace = true }
+tokio = { workspace = true }
+clickhouse = { workspace = true }
+redis = { workspace = true }
+dotenvy = { workspace = true }

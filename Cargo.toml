@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = [ "apps/ingestion_api", "libs/billing_core", "libs/billing_db"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+authors = ["shribaspanja"]
+
+[workspace.dependencies]
+axum = "0.8.8"
+chrono = "0.4.42"
+uuid = { version = "1.19.0", features = ["v4", "serde"] }
+tokio = { version = "1.48.0" , features = ["full"] }
+serde = { version = "1.0.228", features = ["derive"] }
+clickhouse = { version = "0.14.1", features = ["test-util", "uuid"] }
+redis = { version = "1.0.2", features = ["tokio-comp", "connection-manager"] }
+tokio-util = "0.7.17"
+metrics-exporter-prometheus = "0.18.1"
+metrics = "0.24.3"
+dashmap = "6.1.0"
+dotenvy = "0.15.7"
+
+billing_core = { path = "libs/billing_core" }
+billing_db = { path = "libs/billing_db" }

@@ -1,0 +1,65 @@
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: alloy-clickhouse
+    environment:
+      - CLICKHOUSE_USER=admin
+      - CLICKHOUSE_PASSWORD=password123
+      - CLICKHOUSE_DB=alloy_billing
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    # volumes:
+    #   - clickhouse_data:/var/lib/clickhouse
+
+  redis:
+    image: redis:7-alpine
+    container_name: alloy-redis
+    #command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+    # volumes:
+    #   - redis_data:/data
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: alloy-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: alloy-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+#   postgres:
+#     image: postgres:16-alpine
+#     container_name: alloy-postgres
+#     environment:
+#       - POSTGRES_USER=admin
+#       - POSTGRES_PASSWORD=password123
+#       - POSTGRES_DB=alloy_metadata
+#     ports:
+#       - "5432:5432"
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+
+# volumes:
+#   clickhouse_data:
+#   redis_data:
+#   postgres_data:
+
+volumes:
+  grafana_data:

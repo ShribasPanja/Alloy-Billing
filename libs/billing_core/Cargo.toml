@@ -1,0 +1,11 @@
+[package]
+name = "billing_core"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+clickhouse = { workspace = true }

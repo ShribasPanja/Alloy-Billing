@@ -1,0 +1,19 @@
+[package]
+name = "ingestion_api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }
+clickhouse = { workspace = true }
+billing_core = { workspace = true }
+billing_db = { workspace = true }
+redis = { workspace = true }
+tokio-util = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+metrics = { workspace = true }
+dashmap = { workspace = true }
+dotenvy = { workspace = true }
