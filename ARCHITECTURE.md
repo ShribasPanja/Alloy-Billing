@@ -1,52 +1,33 @@
-# Detailed System Architecture & Data Flow
+# Alloy System Architecture
 
-This diagram illustrates the internal mechanics of the Alloy Ingestion Engine under high load (15k RPS). It highlights the "Double-Buffering" strategy, the multi-level caching, and the asynchronous hand-offs that prevent blocking.
+This document outlines the technical architecture of the Alloy Ingestion Engine, detailing how data flows from a client request to permanent storage in ClickHouse.
 
-## 🧠 Deep-Dive Diagram
+## High-Level Data Flow
+
+The system follows a **Producer-Consumer** pattern decoupled by a bounded MPSC (Multi-Producer, Multi-Consumer) channel to ensure high availability and backpressure management.
+
+
 
 ```mermaid
 graph TD
-    %% Definitions and Styling
-    classDef async fill:#f9f,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
-    classDef db fill:#e1f5fe,stroke:#0277bd;
-    classDef buffer fill:#fff3e0,stroke:#e65100;
-    classDef critical fill:#ffebee,stroke:#c62828;
-
-    Client[k6 Load Tester] ====>|HIGH VELOCITY POST (15k/s)| API[Axum API Handler]
-
-    subgraph "Producer Layer (Axum/Tokio)"
-        API -- "1. Zero-Copy Parse" --> Payload(Event Struct)
-        Payload -- "2. L1 Lock-Free Check" --> L1Cache[L1 Cache: DashMap<Key, Ts>]
-        
-        L1Cache -- Hit (Duplicate) --> Ret202[Return 202 Accepted]
-        
-        L1Cache -- Miss --> TrySend{"3. TrySend(MPSC)"}
-        TrySend -- "Channel Full (Backpressure)" --> Ret503["Return 503 (Circuit Breaker)"]:::critical
-        TrySend -- "Space Available" --> MPSC
+    Client[k6 / Client] -->|HTTP POST| Axum[Axum API Handler]
+    
+    subgraph "Ingestion API (Producer)"
+        Axum --> L1[L1 Cache: DashMap]
+        L1 -->|Unique| MPSC[Bounded MPSC Channel]
+        L1 -->|Duplicate| Resp202[Return 202 Accepted]
     end
 
-    MPSC[Bounded MPSC Channel\nCapacity: 100k Events]:::buffer
+    MPSC -->|Full| Backpressure[Return 503 Service Unavailable]
 
-    subgraph "Consumer Layer (Parallel Worker Tasks)"
-        MPSC -- "Async Recv (Mutex Lock)" --> W1[Worker Loop 1..N]
-        
-        subgraph "Worker Internal State"
-            W1 -- Accumulate --> WBuffer[Internal Vec<Event>\nCap: 2500]
-            WBuffer -- "Threshold Reached / Tick" --> Batcher[Batch Processor]
-            Batcher -- "Chunk (1k size)" --> RedisClient[Redis Connection Manager]
-        end
-
-        RedisClient == "4. Pipelined MGET Batch" ==> Redis[(Redis L2 Cache)]:::db
-        Redis -- "Results Vector" --> Filter[Filter Unique Events]
-        Filter -.->|"Async SETEX (New Keys)"| Redis
-        
-        Filter -- "Unique Batch Ready" --> Spawner{"5. tokio::spawn\n(Double Buffering)"}
+    subgraph "Event Workers (Consumers)"
+        MPSC --> Worker1[Worker Task 1]
+        MPSC --> Worker2[Worker Task 2]
+        Worker1 --> L2[L2 Cache: Redis MGET]
+        Worker2 --> L2
     end
-
-    %% The critical async jump
-    Spawner -.- |"Fire-and-Forget Task"| BgFlush[Background Flusher Task]:::async
-    Spawner ====|"Immediately release worker"| W1
 
     subgraph "Persistence Layer"
-        BgFlush == "6. HTTP Async InsertBatch" ==> ClickHouse[(ClickHouse DB\nasync_insert=1)]:::db
+        L2 -->|Unique Batch| CH[ClickHouse: async_insert]
+        L2 -->|Duplicate| Sink[Drop Event]
     end
