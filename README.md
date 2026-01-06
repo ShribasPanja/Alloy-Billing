@@ -81,5 +81,6 @@ Benchmarks were conducted using **k6** with a `constant-arrival-rate` executor t
 
 ### Running the API
 ```bash
+cargo run --bin ingestion_api
 # Run in release mode for maximum performance
-cargo run --release -p ingestion-api
+cargo run --release -p ingestion_api
