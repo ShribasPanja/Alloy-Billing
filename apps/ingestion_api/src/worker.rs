@@ -3,45 +3,54 @@ use clickhouse::{Client, insert};
 use metrics::{counter, gauge, histogram};
 use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
+use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, Semaphore, mpsc};
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 
 pub async fn start_event_worker(
-    mut rx: mpsc::Receiver<UsageEvent>,
+    rx: Arc<Mutex<mpsc::Receiver<UsageEvent>>>,
     client: Client,
     mut redis: ConnectionManager,
     worker_token: CancellationToken,
+    semaphore: Arc<Semaphore>,
+    worker_id: usize,
 ) {
     let mut buffer = Vec::with_capacity(5000);
     let mut flush_interval = interval(Duration::from_millis(500));
 
     loop {
-        let client_handle = client.clone();
         tokio::select! {
             _ = worker_token.cancelled() => {
-                println!("Worker: Final flush...");
-                process_and_flush(client_handle, &mut redis, &mut buffer).await;
-                gauge!("mpsc_buffer_usage").set(rx.capacity() as f64);
+                println!("Worker {}: Final flush...", worker_id);
+                let mut rx_lock = rx.lock().await;
+                while let Ok(event) = rx_lock.try_recv() {
+                    buffer.push(event);
+                }
+                process_and_flush(client.clone(), &mut redis, &mut buffer, semaphore.clone()).await;
                 return;
             }
 
-            Some(event) = rx.recv() => {
-                buffer.push(event);
+            maybe_event = async {
+                let mut rx_lock = rx.lock().await;
+                rx_lock.recv().await
+            } => {
+                if let Some(event) = maybe_event {
+                    buffer.push(event);
+                    
+                    let current_occupancy = 100_000 - rx.lock().await.capacity();
+                    gauge!("mpsc_buffer_usage").set(current_occupancy as f64);
 
-                gauge!("mpsc_buffer_usage").set(rx.capacity() as f64);
-
-                if buffer.len() >= 5000 {
-                    process_and_flush(client_handle, &mut redis, &mut buffer).await;
-                    gauge!("mpsc_buffer_usage").set(rx.capacity() as f64);
+                    if buffer.len() >= 5000 {
+                        process_and_flush(client.clone(), &mut redis, &mut buffer, semaphore.clone()).await;
+                    }
                 }
             }
 
             _ = flush_interval.tick() => {
                 if !buffer.is_empty() {
-                    process_and_flush(client_handle, &mut redis, &mut buffer).await;
-                    gauge!("mpsc_buffer_usage").set(rx.capacity() as f64);
+                    process_and_flush(client.clone(), &mut redis, &mut buffer, semaphore.clone()).await;
                 }
             }
         }
@@ -52,13 +61,13 @@ async fn process_and_flush(
     client: Client,
     redis: &mut ConnectionManager,
     buffer: &mut Vec<UsageEvent>,
+    semaphore: Arc<Semaphore>,
 ) {
-    if buffer.is_empty() {
-        return;
-    }
+    if buffer.is_empty() { return; }
+
+    histogram!("worker_batch_size").record(buffer.len() as f64);
 
     let keys: Vec<String> = buffer.iter().map(|e| e.idempotency_key.clone()).collect();
-
     let results: Vec<Option<String>> = match redis.mget(&keys).await {
         Ok(res) => res,
         Err(e) => {
@@ -75,7 +84,6 @@ async fn process_and_flush(
         if result.is_none() {
             let event = &buffer[i];
             unique_events.push(event.clone());
-
             pipe.set_ex(&event.idempotency_key, 1, 86400);
             has_new_keys = true;
         } else {
@@ -88,7 +96,10 @@ async fn process_and_flush(
     }
 
     if !unique_events.is_empty() {
+        let permit = semaphore.acquire_owned().await.expect("Semaphore closed");
+        
         tokio::spawn(async move {
+            let _permit = permit;
             if let Err(e) = flush_with_retry(&client, &mut unique_events, 5).await {
                 eprintln!("Clickhouse Critical Error: {:?}", e);
             }

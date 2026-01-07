@@ -17,3 +17,5 @@ metrics-exporter-prometheus = { workspace = true }
 metrics = { workspace = true }
 dashmap = { workspace = true }
 dotenvy = { workspace = true }
+moka = { workspace = true }
+num_cpus = { workspace = true }

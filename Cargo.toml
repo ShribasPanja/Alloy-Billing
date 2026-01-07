@@ -20,6 +20,8 @@ metrics-exporter-prometheus = "0.18.1"
 metrics = "0.24.3"
 dashmap = "6.1.0"
 dotenvy = "0.15.7"
+moka = { version = "0.12.12", features = ["future"] }
+num_cpus = "1.17.0"
 
 billing_core = { path = "libs/billing_core" }
 billing_db = { path = "libs/billing_db" }

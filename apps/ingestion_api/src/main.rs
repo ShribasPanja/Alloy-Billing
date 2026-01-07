@@ -7,19 +7,20 @@ use axum::{
 };
 use billing_core::UsageEvent;
 use billing_db::{create_client, init_db};
-use dashmap::DashMap;
 use dotenvy::dotenv;
 use ingestion_api::worker::start_event_worker;
 use metrics::{counter, gauge};
 use metrics_exporter_prometheus::PrometheusBuilder;
-use std::sync::Arc;
-use tokio::{main, signal::ctrl_c, sync::mpsc};
+use moka::future::Cache;
+use std::{sync::Arc, time::Duration};
+use tokio::{main, signal::ctrl_c, sync::{Mutex, Semaphore, mpsc}};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct AppState {
     pub tx: mpsc::Sender<UsageEvent>,
-    pub local_cache: Arc<DashMap<String, i64>>,
+    pub local_cache: Cache<String, i64>,
+    pub flush_semaphore: Arc<Semaphore>
 }
 
 #[main]
@@ -38,6 +39,12 @@ async fn main() {
 
     let token = CancellationToken::new();
     let (tx, rx) = mpsc::channel::<UsageEvent>(100_000);
+    let local_cache = Cache::builder()
+        .max_capacity(100_000) // Limits memory usage
+        .time_to_live(Duration::from_secs(600)) // Auto-expire after 10 mins
+        .build();
+    let flush_semaphore = Arc::new(Semaphore::new(50));
+    let shared_rx = Arc::new(Mutex::new(rx));
 
     PrometheusBuilder::new()
         .with_http_listener(([0, 0, 0, 0], 8000))
@@ -46,24 +53,25 @@ async fn main() {
 
     let state = AppState {
         tx,
-        local_cache: Arc::new(DashMap::with_capacity(100_000)),
+        local_cache,
+        flush_semaphore,
     };
 
-    let cache_for_janitor = state.local_cache.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            let now = chrono::Utc::now().timestamp();
-            cache_for_janitor.retain(|_, ts| *ts > now - 600);
-            gauge!("local_cache_size").set(cache_for_janitor.len() as f64);
-        }
-    });
+    let num_workers = num_cpus::get();
+    println!("⚙️ Spawning {} worker threads...", num_workers);
 
-    let worker_token = token.clone();
-    tokio::spawn(async move {
-        start_event_worker(rx, clickhouse_client, redis_mgr, worker_token).await;
-    });
+
+    for i in 0..num_workers {
+        let worker_rx = Arc::clone(&shared_rx);
+        let ch_client = clickhouse_client.clone();
+        let r_mgr = redis_mgr.clone();
+        let worker_token = token.clone();
+        let semaphore = Arc::clone(&state.flush_semaphore);
+
+        tokio::spawn(async move {
+            start_event_worker(worker_rx, ch_client, r_mgr, worker_token, semaphore, i).await;
+        });
+    }
 
     let app = Router::new()
         .route("/", get(|| async { "OK" }))
@@ -88,17 +96,16 @@ async fn ingest_handler(
 ) -> impl IntoResponse {
     counter!("api_request_total").increment(1);
     gauge!("mpsc_buffer_usage").set(state.tx.capacity() as f64);
+    gauge!("local_cache_size").set(state.local_cache.entry_count() as f64);
+
     payload.timestamp = chrono::Utc::now().timestamp();
 
-    match state.local_cache.entry(payload.idempotency_key.clone()) {
-        dashmap::mapref::entry::Entry::Occupied(_) => {
-            counter!("api_duplicate_request_total", "source" => "local").increment(1);
-            return (StatusCode::ACCEPTED, "Duplicate").into_response();
-        }
-        dashmap::mapref::entry::Entry::Vacant(entry) => {
-            entry.insert(payload.timestamp);
-        }
+    if let Some(_) = state.local_cache.get(&payload.idempotency_key).await {
+        counter!("api_duplicate_request_total", "source" => "local").increment(1);
+        return (StatusCode::ACCEPTED, "Duplicate").into_response();
     }
+    
+    state.local_cache.insert(payload.idempotency_key.clone(), payload.timestamp).await;
 
     match state.tx.try_send(payload) {
         Ok(_) => {
