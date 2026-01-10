@@ -1,6 +1,6 @@
 # Alloy: High-Performance Event Ingestion Engine
 
-**Alloy** is a distributed, high-throughput event ingestion system architected in **Rust**. It is designed to handle massive ingestion spikes (15,000+ RPS) while maintaining strict idempotency guarantees and database integrity.
+**Alloy** is a distributed, high-throughput event ingestion system architected in **Rust**. It is designed to handle massive ingestion spikes (16,000+ RPS) while maintaining strict idempotency guarantees and database integrity.
 
 The system is optimized for **horizontal scalability**, utilizing a multi-layered caching strategy and asynchronous backpressure mechanisms to protect downstream resources.
 
@@ -30,7 +30,7 @@ The engine is structured as a **Cargo Workspace** to enforce clear separation of
 1.  **Request Arrival**: Axum receives a JSON payload.
 2.  **L1 Filter**: Instant check against a local `DashMap` to drop immediate duplicates in RAM.
 3.  **Buffered Handoff**: Payload is pushed to a bounded MPSC channel. If full, a `503 Service Unavailable` is returned (**Circuit Breaking**).
-4.  **Worker Processing**: Parallel workers pull batches (5,000 events) from the channel.
+4.  **Worker Processing**: Parallel workers pull batches (10,000 events) from the channel.
 5.  **L2 Global Check**: Workers perform a batched `MGET` against Redis to verify idempotency across the cluster.
 6.  **Batched Insert**: Unique events are flushed to ClickHouse using `async_insert` for maximum disk I/O efficiency.
 
@@ -43,16 +43,13 @@ Benchmarks were conducted using **k6** with a `constant-arrival-rate` executor t
 ### Results at Peak Saturation
 | Metric | Result |
 | :--- | :--- |
-| **Target Arrival Rate** | 15,000 RPS |
-| **Max Operations (Checks)** | **18,882/s** |
-| **Sustained Success Rate** | **~9,400 RPS** |
-| **Avg Latency** | **167.79ms** |
-| **p95 Latency** | **326.81ms** |
-| **Total Success (202)** | 857,074 |
+| **Target Arrival Rate** | 20,000 RPS |
+| **Max Operations (Checks)** | **32,319/s** |
+| **Sustained Success Rate** | **~16,160 RPS** |
+| **Avg Latency** | **181.65ms** |
+| **p95 Latency** | **455.32ms** |
+| **Total Success (202)** | 3,878,779 |
 
-
-
-> **Note on Success Rate:** The ~50% failure rate during stress testing is an **intentional demonstration of the backpressure mechanism**. When the internal buffers reached 100,000 pending events, the system successfully protected the database by rejecting overflow traffic, maintaining stable latency for accepted requests.
 
 ---
 
