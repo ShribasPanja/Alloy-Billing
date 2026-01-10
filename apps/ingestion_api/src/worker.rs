@@ -14,8 +14,8 @@ pub async fn start_event_worker(
     mut redis: ConnectionManager,
     worker_token: CancellationToken,
 ) {
-    let mut buffer = Vec::with_capacity(5000);
-    let mut flush_interval = interval(Duration::from_millis(500));
+    let mut buffer = Vec::with_capacity(10_00);
+    let mut flush_interval = interval(Duration::from_millis(1000));
 
     loop {
         let client_handle = client.clone();
@@ -23,25 +23,25 @@ pub async fn start_event_worker(
             _ = worker_token.cancelled() => {
                 println!("Worker: Final flush...");
                 process_and_flush(client_handle, &mut redis, &mut buffer).await;
-                gauge!("mpsc_buffer_usage").set(rx.capacity() as f64);
+                gauge!("mpsc_buffer_usage").set((100_000 - rx.capacity()) as f64);
                 return;
             }
 
             Some(event) = rx.recv() => {
                 buffer.push(event);
 
-                gauge!("mpsc_buffer_usage").set(rx.capacity() as f64);
+                gauge!("mpsc_buffer_usage").set((100_000 - rx.capacity()) as f64);
 
-                if buffer.len() >= 5000 {
+                if buffer.len() >= 10_000 {
                     process_and_flush(client_handle, &mut redis, &mut buffer).await;
-                    gauge!("mpsc_buffer_usage").set(rx.capacity() as f64);
+                    gauge!("mpsc_buffer_usage").set((100_000 - rx.capacity()) as f64);
                 }
             }
 
             _ = flush_interval.tick() => {
                 if !buffer.is_empty() {
                     process_and_flush(client_handle, &mut redis, &mut buffer).await;
-                    gauge!("mpsc_buffer_usage").set(rx.capacity() as f64);
+                    gauge!("mpsc_buffer_usage").set((100_000 - rx.capacity()) as f64);
                 }
             }
         }
@@ -56,6 +56,9 @@ async fn process_and_flush(
     if buffer.is_empty() {
         return;
     }
+
+    histogram!("worker_batch_size").record(buffer.len() as f64);
+    let start_flush = Instant::now();
 
     let keys: Vec<String> = buffer.iter().map(|e| e.idempotency_key.clone()).collect();
 
@@ -92,6 +95,7 @@ async fn process_and_flush(
             if let Err(e) = flush_with_retry(&client, &mut unique_events, 5).await {
                 eprintln!("Clickhouse Critical Error: {:?}", e);
             }
+            histogram!("total_flush_duration_seconds").record(start_flush.elapsed().as_secs_f64());
         });
     }
 

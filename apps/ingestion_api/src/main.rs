@@ -87,7 +87,7 @@ async fn ingest_handler(
     Json(mut payload): Json<UsageEvent>,
 ) -> impl IntoResponse {
     counter!("api_request_total").increment(1);
-    gauge!("mpsc_buffer_usage").set(state.tx.capacity() as f64);
+    gauge!("mpsc_buffer_usage").set((100_000 - state.tx.capacity()) as f64);
     payload.timestamp = chrono::Utc::now().timestamp();
 
     match state.local_cache.entry(payload.idempotency_key.clone()) {

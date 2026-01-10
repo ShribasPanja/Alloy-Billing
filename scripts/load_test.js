@@ -5,17 +5,17 @@ export const options = {
     scenarios: {
         constant_request_rate: {
             executor: 'constant-arrival-rate',
-            rate: 15000,
+            rate: 20000,
             timeUnit: '1s',
-            duration: '3m',
-            preAllocatedVUs: 1000,
-            maxVUs: 2000,
+            duration: '4m',
+            preAllocatedVUs: 2000,
+            maxVUs: 10000,
         },
     },
 };
 
 export default function () {
-    const url = 'http://localhost:3000/ingest';
+    const url = 'http://127.0.0.1:3000/ingest';
 
     const payload = JSON.stringify({
         event_id: "550e8400-e29b-41d4-a716-446655440000",
@@ -34,6 +34,6 @@ export default function () {
 
     check(res, {
         'status is 202': (r) => r.status === 202,
-        'body has success message': (r) => r.body && r.body.includes('accepted'),
+        'backpressure active (503)': (r) => r.status === 503
     });
 }
